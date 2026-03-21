@@ -14,7 +14,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
@@ -27,9 +26,9 @@ from data.sample_data import (
 )
 from indicators.technical import enrich_dataframe, classify_market
 from options.chain_processor import enrich_chain, compute_pcr, max_pain
-from options.liquidity_filter import filter_liquid_strikes, liquidity_score
+from options.liquidity_filter import filter_liquid_strikes
 from strike_selection.selector import StrikeSelector
-from probability.monte_carlo import simulate_terminal_prices, spread_expected_payoff
+from probability.monte_carlo import simulate_terminal_prices
 from probability.black_scholes import bs_pop_above, bs_pop_between
 from probability.pop_estimator import POPEstimator
 from backtest.metrics import compute_metrics, equity_curve
@@ -158,6 +157,33 @@ st.markdown("""
         border-radius: 12px;
         padding: 1rem;
     }
+    /* Streamlit metrics: readable on dark cards */
+    div[data-testid="stMetric"] label,
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] p {
+        color: #cbd5e1 !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: #f8fafc !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+        color: #e2e8f0 !important;
+    }
+    /* Sidebar inputs */
+    div[data-testid="stSidebar"] label { color: #e2e8f0 !important; }
+    div[data-testid="stSidebar"] .stMarkdown p { color: #cbd5e1; }
+    /* Main area: inputs readable on dark theme */
+    div[data-testid="stNumberInput"] input,
+    div[data-testid="stNumberInput"] input:focus {
+        color: #f8fafc !important;
+        background-color: #334155 !important;
+        -webkit-text-fill-color: #f8fafc !important;
+    }
+    div[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+        color: #f1f5f9 !important;
+        background-color: #334155 !important;
+    }
+    div[data-testid="stMultiSelect"] span { color: #e2e8f0 !important; }
+    div[data-testid="stRadio"] label { color: #e2e8f0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -168,10 +194,10 @@ with st.sidebar:
     st.markdown("## ⚙️ Configuration")
     st.markdown("---")
 
-    spot_price = st.number_input("NIFTY Spot Price", value=22450.0, step=50.0, format="%.1f")
+    spot_price = st.number_input("NIFTY Spot Price", value=23000.0, step=50.0, format="%.1f")
     tte_days = st.slider("Days to Expiry", 1, 7, 5)
     base_iv = st.slider("Base IV (%)", 8, 40, 14) / 100
-    capital = st.number_input("Capital (₹)", value=DEFAULT_CAPITAL, step=50000)
+    capital = st.number_input("Capital (₹)", value=float(DEFAULT_CAPITAL), step=50000.0, format="%.0f")
 
     st.markdown("---")
     st.markdown("### 🎯 Strategy Filters")
@@ -181,8 +207,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📊 Liquidity Filters")
-    min_oi = st.number_input("Min Open Interest", value=50000, step=10000)
-    min_vol = st.number_input("Min Volume", value=500, step=100)
+    min_oi = int(st.number_input("Min Open Interest", value=50000.0, step=10000.0, format="%.0f"))
+    min_vol = int(st.number_input("Min Volume", value=500.0, step=100.0, format="%.0f"))
 
     st.markdown("---")
     st.markdown(
@@ -198,7 +224,8 @@ with st.sidebar:
 @st.cache_data(ttl=300)
 def load_data(spot, tte, iv):
     chain = generate_option_chain(spot, tte, iv)
-    history = generate_nifty_history(252, start_price=spot * 0.92)
+    # Scale synthetic history so last close matches sidebar spot (technical snapshot aligns)
+    history = generate_nifty_history(252, start_price=float(spot) * 0.92, end_price=float(spot))
     backtest = generate_backtest_results(52)
     return chain, history, backtest
 
@@ -208,8 +235,10 @@ enriched_chain = enrich_chain(chain_df, spot_price, tte_days)
 liquid_chain = filter_liquid_strikes(enriched_chain, min_oi, min_vol)
 
 latest = enriched_history.iloc[-1]
+# Align regime with last bar (series scaled to end at configured spot)
+latest_close = float(latest["close"])
 market_condition = classify_market(
-    spot_price, latest["rsi_14"], latest["sma_20"], latest["sma_50"],
+    latest_close, float(latest["rsi_14"]), float(latest["sma_20"]), float(latest["sma_50"]),
     base_iv, base_iv * 0.95,
 )
 
@@ -236,7 +265,7 @@ condition_html = f'<span class="condition-badge {badge_class}">{market_condition
 
 cols = st.columns(6)
 metrics = [
-    ("NIFTY SPOT", f"₹{spot_price:,.0f}", "white", f"ATM: {round(spot_price/50)*50}"),
+    ("NIFTY SPOT", f"₹{latest_close:,.0f}", "white", f"ATM: {int(round(float(spot_price) / 50) * 50)}"),
     ("MARKET", condition_html, "", f"RSI: {latest['rsi_14']:.1f}"),
     ("IV LEVEL", f"{base_iv*100:.1f}%", "purple", f"VIX proxy"),
     ("PCR (OI)", f"{pcr_data['oi_pcr']:.2f}", "blue" if pcr_data['oi_pcr'] > 1 else "orange", pcr_data['interpretation'].title()),
@@ -280,75 +309,104 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # TAB 1: Market Overview
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _plotly_axis_style(fig):
+    fig.update_xaxes(
+        gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)",
+        tickfont=dict(color="#cbd5e1"), title_font=dict(color="#e2e8f0"),
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)",
+        tickfont=dict(color="#cbd5e1"), title_font=dict(color="#e2e8f0"),
+    )
+
+
 with tab1:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.markdown("### NIFTY Price Action & Technical Indicators")
-
-        fig = make_subplots(
-            rows=3, cols=1, shared_xaxes=True,
-            vertical_spacing=0.04,
-            row_heights=[0.55, 0.25, 0.20],
-            subplot_titles=("Price & Moving Averages", "RSI (14)", "Volume"),
-        )
-
-        fig.add_trace(go.Candlestick(
+        st.markdown("### NIFTY — Price & moving averages")
+        fig_price = go.Figure()
+        fig_price.add_trace(go.Candlestick(
             x=enriched_history["date"],
             open=enriched_history["open"], high=enriched_history["high"],
             low=enriched_history["low"], close=enriched_history["close"],
             name="NIFTY", increasing_line_color="#00d4aa", decreasing_line_color="#ff6b6b",
-        ), row=1, col=1)
-
+        ))
         for col_name, color, dash in [
             ("sma_20", "#4ecdc4", "solid"),
             ("sma_50", "#fbbf24", "dash"),
             ("bb_upper", "#a78bfa", "dot"),
             ("bb_lower", "#a78bfa", "dot"),
         ]:
-            fig.add_trace(go.Scatter(
+            fig_price.add_trace(go.Scatter(
                 x=enriched_history["date"], y=enriched_history[col_name],
                 name=col_name.upper().replace("_", " "),
                 line=dict(color=color, width=1.5, dash=dash),
-                opacity=0.8,
-            ), row=1, col=1)
-
-        fig.add_trace(go.Scatter(
-            x=enriched_history["date"], y=enriched_history["rsi_14"],
-            name="RSI 14", line=dict(color="#a78bfa", width=2),
-        ), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,107,107,0.5)", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="rgba(0,212,170,0.5)", row=2, col=1)
-        fig.add_hrect(y0=30, y1=70, fillcolor="rgba(167,139,250,0.05)", line_width=0, row=2, col=1)
-
-        colors = ["#00d4aa" if c >= o else "#ff6b6b"
-                  for c, o in zip(enriched_history["close"], enriched_history["open"])]
-        fig.add_trace(go.Bar(
-            x=enriched_history["date"], y=enriched_history["volume"],
-            name="Volume", marker_color=colors, opacity=0.6,
-        ), row=3, col=1)
-
-        fig.update_layout(
+                opacity=0.85,
+            ))
+        fig_price.update_layout(
             template="plotly_dark",
-            height=700,
+            height=440,
+            margin=dict(l=60, r=30, t=50, b=50),
             showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
             xaxis_rangeslider_visible=False,
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,12,41,0.5)",
-            font=dict(family="Inter"),
+            plot_bgcolor="rgba(15,12,41,0.55)",
+            font=dict(family="Inter", color="#e2e8f0"),
+            xaxis_title="Date",
+            yaxis_title="Price (₹)",
         )
-        fig.update_xaxes(gridcolor="rgba(255,255,255,0.05)")
-        fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)")
-        st.plotly_chart(fig, use_container_width=True)
+        _plotly_axis_style(fig_price)
+        st.plotly_chart(fig_price, use_container_width=True)
+
+        rsi_c, vol_c = st.columns(2)
+        with rsi_c:
+            st.markdown("#### RSI (14)")
+            fig_rsi = go.Figure()
+            fig_rsi.add_trace(go.Scatter(
+                x=enriched_history["date"], y=enriched_history["rsi_14"],
+                name="RSI", line=dict(color="#a78bfa", width=2),
+            ))
+            fig_rsi.add_hline(y=70, line_dash="dash", line_color="rgba(255,107,107,0.6)")
+            fig_rsi.add_hline(y=30, line_dash="dash", line_color="rgba(0,212,170,0.6)")
+            fig_rsi.add_hrect(y0=30, y1=70, fillcolor="rgba(167,139,250,0.06)", line_width=0)
+            fig_rsi.update_layout(
+                template="plotly_dark", height=300,
+                margin=dict(l=50, r=20, t=30, b=40),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.55)",
+                font=dict(color="#e2e8f0"), showlegend=False,
+                xaxis_title="Date", yaxis_title="RSI",
+            )
+            _plotly_axis_style(fig_rsi)
+            st.plotly_chart(fig_rsi, use_container_width=True)
+
+        with vol_c:
+            st.markdown("#### Volume")
+            vol_colors = ["#00d4aa" if c >= o else "#ff6b6b"
+                          for c, o in zip(enriched_history["close"], enriched_history["open"])]
+            fig_vol = go.Figure(go.Bar(
+                x=enriched_history["date"], y=enriched_history["volume"],
+                name="Volume", marker_color=vol_colors, opacity=0.65,
+            ))
+            fig_vol.update_layout(
+                template="plotly_dark", height=300,
+                margin=dict(l=50, r=20, t=30, b=40),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.55)",
+                font=dict(color="#e2e8f0"), showlegend=False,
+                xaxis_title="Date", yaxis_title="Volume",
+            )
+            _plotly_axis_style(fig_vol)
+            st.plotly_chart(fig_vol, use_container_width=True)
 
     with col2:
         st.markdown("### Technical Snapshot")
+        st.caption("Synthetic history scaled so last close = NIFTY spot in sidebar.")
 
         indicators = {
-            "Close": (f"₹{latest['close']:,.2f}", "white"),
-            "SMA 20": (f"₹{latest['sma_20']:,.2f}", "green" if spot_price > latest['sma_20'] else "red"),
-            "SMA 50": (f"₹{latest['sma_50']:,.2f}", "green" if spot_price > latest['sma_50'] else "red"),
+            "Close": (f"₹{latest_close:,.2f}", "white"),
+            "SMA 20": (f"₹{latest['sma_20']:,.2f}", "green" if latest_close > latest['sma_20'] else "red"),
+            "SMA 50": (f"₹{latest['sma_50']:,.2f}", "green" if latest_close > latest['sma_50'] else "red"),
             "RSI 14": (f"{latest['rsi_14']:.1f}", "red" if latest['rsi_14'] > 70 else "green" if latest['rsi_14'] < 30 else "blue"),
             "VWAP": (f"₹{latest['vwap']:,.2f}", "blue"),
             "BB Upper": (f"₹{latest['bb_upper']:,.2f}", "purple"),
@@ -509,44 +567,44 @@ with tab3:
             "Iron Condor",
         ])
 
-        atm_strike = round(spot_price / 50) * 50
-        spot_range = np.linspace(spot_price * 0.92, spot_price * 1.08, 500)
+        atm_strike = float(round(float(spot_price) / 50) * 50)
+        spot_range = np.linspace(float(spot_price) * 0.92, float(spot_price) * 1.08, 500)
 
         if strategy_type == "Bull Call Spread":
-            buy_k = st.number_input("Buy Call Strike", value=atm_strike, step=50.0)
-            sell_k = st.number_input("Sell Call Strike", value=atm_strike + 200.0, step=50.0)
-            premium = st.number_input("Net Premium Paid", value=85.0, step=5.0)
+            buy_k = st.number_input("Buy Call Strike", value=atm_strike, step=50.0, format="%.0f")
+            sell_k = st.number_input("Sell Call Strike", value=atm_strike + 200.0, step=50.0, format="%.0f")
+            premium = st.number_input("Net Premium Paid", value=85.0, step=5.0, format="%.1f")
             payoff = bull_call_payoff(spot_range, buy_k, sell_k, premium, NIFTY_LOT_SIZE)
 
         elif strategy_type == "Bear Put Spread":
-            buy_k = st.number_input("Buy Put Strike", value=atm_strike, step=50.0)
-            sell_k = st.number_input("Sell Put Strike", value=atm_strike - 200.0, step=50.0)
-            premium = st.number_input("Net Premium Paid", value=80.0, step=5.0)
+            buy_k = st.number_input("Buy Put Strike", value=atm_strike, step=50.0, format="%.0f")
+            sell_k = st.number_input("Sell Put Strike", value=atm_strike - 200.0, step=50.0, format="%.0f")
+            premium = st.number_input("Net Premium Paid", value=80.0, step=5.0, format="%.1f")
             payoff = bear_put_payoff(spot_range, buy_k, sell_k, premium, NIFTY_LOT_SIZE)
 
         elif strategy_type in ("Long Strangle", "Short Strangle"):
-            put_k = st.number_input("Put Strike", value=atm_strike - 200.0, step=50.0)
-            call_k = st.number_input("Call Strike", value=atm_strike + 200.0, step=50.0)
-            premium = st.number_input("Total Premium", value=120.0, step=5.0)
+            put_k = st.number_input("Put Strike", value=atm_strike - 200.0, step=50.0, format="%.0f")
+            call_k = st.number_input("Call Strike", value=atm_strike + 200.0, step=50.0, format="%.0f")
+            premium = st.number_input("Total Premium", value=120.0, step=5.0, format="%.1f")
             if strategy_type == "Long Strangle":
                 payoff = long_strangle_payoff(spot_range, put_k, call_k, premium, NIFTY_LOT_SIZE)
             else:
                 payoff = short_strangle_payoff(spot_range, put_k, call_k, premium, NIFTY_LOT_SIZE)
 
         elif strategy_type in ("Long Straddle", "Short Straddle"):
-            straddle_k = st.number_input("Straddle Strike", value=atm_strike, step=50.0)
-            premium = st.number_input("Total Premium", value=200.0, step=5.0)
+            straddle_k = st.number_input("Straddle Strike", value=atm_strike, step=50.0, format="%.0f")
+            premium = st.number_input("Total Premium", value=200.0, step=5.0, format="%.1f")
             if strategy_type == "Long Straddle":
                 payoff = (np.abs(spot_range - straddle_k) - premium) * NIFTY_LOT_SIZE
             else:
                 payoff = (premium - np.abs(spot_range - straddle_k)) * NIFTY_LOT_SIZE
 
         else:  # Iron Condor
-            pb = st.number_input("Put Buy Strike", value=atm_strike - 300.0, step=50.0)
-            ps = st.number_input("Put Sell Strike", value=atm_strike - 150.0, step=50.0)
-            cs = st.number_input("Call Sell Strike", value=atm_strike + 150.0, step=50.0)
-            cb = st.number_input("Call Buy Strike", value=atm_strike + 300.0, step=50.0)
-            premium = st.number_input("Net Credit", value=65.0, step=5.0)
+            pb = st.number_input("Put Buy Strike", value=atm_strike - 300.0, step=50.0, format="%.0f")
+            ps = st.number_input("Put Sell Strike", value=atm_strike - 150.0, step=50.0, format="%.0f")
+            cs = st.number_input("Call Sell Strike", value=atm_strike + 150.0, step=50.0, format="%.0f")
+            cb = st.number_input("Call Buy Strike", value=atm_strike + 300.0, step=50.0, format="%.0f")
+            premium = st.number_input("Net Credit", value=65.0, step=5.0, format="%.1f")
             payoff = iron_condor_payoff(spot_range, pb, ps, cs, cb, premium, NIFTY_LOT_SIZE)
 
     with sb_col2:
@@ -575,11 +633,13 @@ with tab3:
 
         fig_payoff.update_layout(
             template="plotly_dark", height=500,
-            title=dict(text=f"{strategy_type} — Payoff at Expiry", font=dict(size=16)),
+            title=dict(text=f"{strategy_type} — Payoff at Expiry", font=dict(size=16, color="#f1f5f9")),
             xaxis_title="NIFTY at Expiry",
             yaxis_title=f"P&L (₹) — Lot Size: {NIFTY_LOT_SIZE}",
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.5)",
+            font=dict(color="#e2e8f0"),
         )
+        _plotly_axis_style(fig_payoff)
         st.plotly_chart(fig_payoff, use_container_width=True)
 
         m1, m2, m3, m4 = st.columns(4)
@@ -601,14 +661,14 @@ with tab4:
 
     with mc_col1:
         st.markdown("#### Simulation Parameters")
-        mc_spot = st.number_input("Spot Price", value=spot_price, step=50.0, key="mc_spot")
+        mc_spot = st.number_input("Spot Price", value=float(spot_price), step=50.0, format="%.1f", key="mc_spot")
         mc_iv = st.slider("Volatility (%)", 8, 50, int(base_iv * 100), key="mc_iv") / 100
-        mc_tte = st.slider("Days to Expiry", 1, 30, tte_days, key="mc_tte")
-        mc_sims = st.select_slider("Simulations", options=[5000, 10000, 25000, 50000, 100000], value=n_sims, key="mc_sims")
+        mc_tte = st.slider("Days to Expiry", 1, 30, int(tte_days), key="mc_tte")
+        mc_sims = int(st.select_slider("Simulations", options=[5000, 10000, 25000, 50000, 100000], value=int(n_sims), key="mc_sims"))
 
-        mc_target = st.number_input("Target Price", value=spot_price * 1.02, step=50.0)
-        mc_lower = st.number_input("Range Lower", value=spot_price * 0.97, step=50.0)
-        mc_upper = st.number_input("Range Upper", value=spot_price * 1.03, step=50.0)
+        mc_target = st.number_input("Target Price", value=float(spot_price) * 1.02, step=50.0, format="%.1f", key="mc_tgt")
+        mc_lower = st.number_input("Range Lower", value=float(spot_price) * 0.97, step=50.0, format="%.1f", key="mc_lo")
+        mc_upper = st.number_input("Range Upper", value=float(spot_price) * 1.03, step=50.0, format="%.1f", key="mc_hi")
 
     with mc_col2:
         terminals = simulate_terminal_prices(mc_spot, mc_iv, mc_tte / 365, mc_sims)
@@ -662,10 +722,14 @@ with tab4:
         fig_mc.add_trace(go.Scatter(x=days, y=lower_1sd, name="-1σ", line=dict(color="#a78bfa", dash="dash")), row=1, col=2)
 
         fig_mc.update_layout(
-            template="plotly_dark", height=500,
+            template="plotly_dark", height=520,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.5)",
             showlegend=True,
+            font=dict(color="#e2e8f0"),
+            title_font=dict(color="#f1f5f9"),
+            margin=dict(t=60, b=50),
         )
+        _plotly_axis_style(fig_mc)
         st.plotly_chart(fig_mc, use_container_width=True)
 
         st.markdown("#### Distribution Statistics")

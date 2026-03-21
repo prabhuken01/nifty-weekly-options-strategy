@@ -111,8 +111,12 @@ def generate_option_chain(spot=22450.0, tte_days=5, base_iv=0.14):
     return pd.DataFrame(rows)
 
 
-def generate_nifty_history(days=252, start_price=21000.0):
-    """Generate realistic NIFTY daily price history."""
+def generate_nifty_history(days=252, start_price=21000.0, end_price=None):
+    """Generate realistic NIFTY daily price history.
+
+    If ``end_price`` is set (e.g. sidebar spot), the entire OHLC path is scaled so
+    the last close equals ``end_price``. Indicators stay consistent with that path.
+    """
     rng = np.random.default_rng(123)
     mu = 0.12 / 252
     sigma = 0.14 / np.sqrt(252)
@@ -128,14 +132,23 @@ def generate_nifty_history(days=252, start_price=21000.0):
     low = prices * (1 - rng.uniform(0.002, 0.015, days))
     volume = rng.integers(100_000, 500_000, days)
 
-    return pd.DataFrame({
+    df = pd.DataFrame({
         "date": dates,
         "open": np.round(np.roll(prices, 1), 2),
         "high": np.round(high, 2),
         "low": np.round(low, 2),
         "close": np.round(prices, 2),
         "volume": volume,
-    }).iloc[1:]
+    }).iloc[1:].reset_index(drop=True)
+
+    if end_price is not None and len(df) > 0:
+        last_close = float(df["close"].iloc[-1])
+        if last_close > 0:
+            scale = float(end_price) / last_close
+            for col in ("open", "high", "low", "close"):
+                df[col] = (df[col] * scale).round(2)
+
+    return df
 
 
 def generate_backtest_results(n_weeks=52):
