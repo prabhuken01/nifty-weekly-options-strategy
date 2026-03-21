@@ -151,6 +151,13 @@ def generate_nifty_history(days=252, start_price=21000.0, end_price=None):
     return df
 
 
+def generate_iv_history(base_iv=0.14, n=52):
+    """Generate a 52-week simulated IV history for IV Rank calculation."""
+    rng = np.random.default_rng(99)
+    history = rng.normal(base_iv, 0.03, n)
+    return np.clip(history, 0.05, 0.60)
+
+
 def generate_backtest_results(n_weeks=52):
     """Generate realistic weekly backtest trade results."""
     rng = np.random.default_rng(77)

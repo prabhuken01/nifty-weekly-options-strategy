@@ -28,6 +28,7 @@ from config.settings import (
 )
 from data.sample_data import (
     generate_option_chain, generate_nifty_history, generate_backtest_results,
+    generate_iv_history,
 )
 from indicators.technical import enrich_dataframe, classify_market
 from options.chain_processor import enrich_chain, compute_pcr, max_pain
@@ -235,6 +236,13 @@ def load_data(spot, tte, iv):
     return chain, history, backtest
 
 chain_df, history_df, backtest_df = load_data(spot_price, tte_days, base_iv)
+
+# IV Rank: where current IV sits vs. simulated 52-week history (0 = lowest, 100 = highest)
+_iv_history = generate_iv_history(base_iv)
+_iv_min, _iv_max = float(_iv_history.min()), float(_iv_history.max())
+iv_rank = float((base_iv - _iv_min) / (_iv_max - _iv_min) * 100) if _iv_max > _iv_min else 50.0
+iv_rank_label = "Low — prefer buying" if iv_rank < 30 else "Elevated — favor selling" if iv_rank > 60 else "Moderate"
+
 enriched_history = enrich_dataframe(history_df)
 enriched_chain = enrich_chain(chain_df, spot_price, tte_days)
 liquid_chain = filter_liquid_strikes(enriched_chain, min_oi, min_vol)
@@ -270,26 +278,39 @@ condition_html = f'<span class="condition-badge {badge_class}">{market_condition
 
 cols = st.columns(6)
 metrics = [
-    ("NIFTY SPOT", f"₹{latest_close:,.0f}", "white", f"ATM: {int(round(float(spot_price) / 50) * 50)}"),
-    ("MARKET", condition_html, "", f"RSI: {latest['rsi_14']:.1f}"),
-    ("IV LEVEL", f"{base_iv*100:.1f}%", "purple", f"VIX proxy"),
-    ("PCR (OI)", f"{pcr_data['oi_pcr']:.2f}", "blue" if pcr_data['oi_pcr'] > 1 else "orange", pcr_data['interpretation'].title()),
-    ("MAX PAIN", f"₹{mp:,.0f}", "orange", f"Dist: {(mp-spot_price)/spot_price*100:+.1f}%"),
-    ("DAYS TO EXPIRY", f"{tte_days}", "green", f"T = {tte_days/365:.4f} yrs"),
+    ("NIFTY SPOT", f"₹{latest_close:,.0f}", "white",
+     f"ATM: {int(round(float(spot_price) / 50) * 50)}",
+     "Last traded price of NIFTY 50 index. ATM = nearest 50-pt strike to spot."),
+    ("MARKET", condition_html, "",
+     f"RSI: {latest['rsi_14']:.1f}",
+     "Market regime detected from RSI + SMA alignment. Drives strategy selection."),
+    ("IV LEVEL", f"{base_iv*100:.1f}%", "purple",
+     f"IV Rank: {iv_rank:.0f}% — {iv_rank_label}",
+     f"Implied Volatility — how nervous the market is. {base_iv*100:.0f}% IV → NIFTY expected to move ~{base_iv/np.sqrt(52)*100:.1f}% this week. IV Rank shows where current IV sits vs the past 52 weeks."),
+    ("PCR (OI)", f"{pcr_data['oi_pcr']:.2f}",
+     "blue" if pcr_data['oi_pcr'] > 1 else "orange",
+     pcr_data['interpretation'].title(),
+     "Put-Call Ratio (Open Interest). >1 = more puts held (bearish bets). <1 = more calls (bullish bets). ~1 = neutral/balanced market."),
+    ("MAX PAIN", f"₹{mp:,.0f}", "orange",
+     f"Dist: {(mp-spot_price)/spot_price*100:+.1f}%",
+     "Strike price where option sellers (writers) lose the least money. Market historically gravitates toward this level at expiry."),
+    ("DAYS TO EXPIRY", f"{tte_days}", "green",
+     "Weekly Thursday expiry",
+     "Calendar days until Thursday expiry. Options lose value (theta decay) fastest in the last 5 days."),
 ]
 
-for i, (label, value, color, sub) in enumerate(metrics):
+for i, (label, value, color, sub, tooltip) in enumerate(metrics):
     with cols[i]:
         if label == "MARKET":
             st.markdown(
-                f'<div class="metric-card"><div class="label">{label}</div>'
+                f'<div class="metric-card" title="{tooltip}"><div class="label">{label}</div>'
                 f'<div style="margin:0.5rem 0">{value}</div>'
                 f'<div class="sub">{sub}</div></div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                f'<div class="metric-card"><div class="label">{label}</div>'
+                f'<div class="metric-card" title="{tooltip}"><div class="label">{label}</div>'
                 f'<div class="value {color}">{value}</div>'
                 f'<div class="sub">{sub}</div></div>',
                 unsafe_allow_html=True,
@@ -413,29 +434,46 @@ with tab1:
 
         v20 = latest["vwap_20d"]
         v20_ok = pd.notna(v20)
+        _rsi = float(latest['rsi_14'])
+        _rsi_color = "red" if _rsi > 70 else "green" if _rsi < 30 else "blue"
+        _rsi_interp = "Overbought — bearish signal" if _rsi > 70 else "Oversold — bullish signal" if _rsi < 30 else "Neutral — no directional signal yet"
         indicators = {
             "Close": (f"₹{latest_close:,.2f}", "white"),
             "SMA 20": (f"₹{latest['sma_20']:,.2f}", "green" if latest_close > latest['sma_20'] else "red"),
             "SMA 50": (f"₹{latest['sma_50']:,.2f}", "green" if latest_close > latest['sma_50'] else "red"),
-            "RSI 14": (f"{latest['rsi_14']:.1f}", "red" if latest['rsi_14'] > 70 else "green" if latest['rsi_14'] < 30 else "blue"),
+            "RSI 14": (f"{_rsi:.1f}", _rsi_color),
             "VWAP (20d)": (
                 f"₹{float(v20):,.2f}" if v20_ok else "—",
                 "blue" if v20_ok and latest_close > v20 else "orange" if v20_ok else "blue",
             ),
             "BB Upper": (f"₹{latest['bb_upper']:,.2f}", "purple"),
             "BB Lower": (f"₹{latest['bb_lower']:,.2f}", "purple"),
-            "ATR 14": (f"{latest['atr_14']:.2f}", "orange"),
+            "ATR 14 (Daily Range)": (f"{latest['atr_14']:.0f} pts", "orange"),
             "Daily Return": (f"{latest['daily_return']*100:+.2f}%", "green" if latest['daily_return'] > 0 else "red"),
         }
 
+        _row_style = 'display:flex;justify-content:space-between;padding:0.5rem 0;border-bottom:1px solid rgba(255,255,255,0.05)'
         for name, (val, color) in indicators.items():
             st.markdown(
-                f'<div style="display:flex;justify-content:space-between;padding:0.5rem 0;'
-                f'border-bottom:1px solid rgba(255,255,255,0.05)">'
+                f'<div style="{_row_style}">'
                 f'<span style="color:#8b8fa3;font-size:0.85rem">{name}</span>'
                 f'<span class="{color}" style="font-weight:600;font-size:0.85rem">{val}</span></div>',
                 unsafe_allow_html=True,
             )
+            # RSI interpretation sub-row
+            if name == "RSI 14":
+                st.markdown(
+                    f'<div style="padding:0.15rem 0 0.4rem 0;border-bottom:1px solid rgba(255,255,255,0.05)">'
+                    f'<span style="color:#6b7280;font-size:0.75rem;font-style:italic">{_rsi_interp}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            # ATR explanation sub-row
+            if name == "ATR 14 (Daily Range)":
+                st.markdown(
+                    f'<div style="padding:0.15rem 0 0.4rem 0;border-bottom:1px solid rgba(255,255,255,0.05)">'
+                    f'<span style="color:#6b7280;font-size:0.75rem;font-style:italic">avg high-to-low swing per day</span></div>',
+                    unsafe_allow_html=True,
+                )
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("### Market Regime Distribution")
@@ -490,6 +528,36 @@ with tab2:
         display_chain = enriched_chain
 
     display_chain = display_chain.sort_values(sort_by)
+
+    # ATM / ITM / OTM colour legend
+    st.markdown(
+        '<div style="display:flex;gap:1.5rem;align-items:center;padding:0.5rem 0;margin-bottom:0.5rem">'
+        '<span style="color:#8b8fa3;font-size:0.78rem;font-weight:500">Strike colours:</span>'
+        '<span style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.4);'
+        'border-radius:6px;padding:2px 10px;font-size:0.75rem;font-weight:600">ATM</span>'
+        '<span style="background:rgba(78,205,196,0.12);color:#4ecdc4;border:1px solid rgba(78,205,196,0.35);'
+        'border-radius:6px;padding:2px 10px;font-size:0.75rem;font-weight:600">ITM — deeper in money</span>'
+        '<span style="background:rgba(107,114,128,0.15);color:#9ca3af;border:1px solid rgba(107,114,128,0.35);'
+        'border-radius:6px;padding:2px 10px;font-size:0.75rem;font-weight:600">OTM — out of money</span>'
+        '<span style="color:#6b7280;font-size:0.73rem;font-style:italic">High OI = liquid (easy to enter/exit)</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Liquidity warning: flag strikes where bid-ask spread > 0.5% of LTP
+    if "ask" in display_chain.columns and "bid" in display_chain.columns and "ltp" in display_chain.columns:
+        _ltp_safe = display_chain["ltp"].replace(0, np.nan)
+        _spread_pct = (display_chain["ask"] - display_chain["bid"]) / _ltp_safe * 100
+        _illiquid = display_chain[_spread_pct > 0.5]["strike_price"].unique()
+        if len(_illiquid) > 0:
+            _bad_str = ", ".join([str(int(s)) for s in sorted(_illiquid)[:10]])
+            st.markdown(
+                f'<div style="background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.3);'
+                f'border-radius:8px;padding:0.5rem 1rem;margin-bottom:0.5rem;font-size:0.8rem;color:#ff6b6b">'
+                f'⚠ <strong>Illiquid strikes</strong> (bid-ask spread &gt;0.5% of LTP): {_bad_str} — '
+                f'wide spreads mean you lose money just entering. Prefer liquid strikes.</div>',
+                unsafe_allow_html=True,
+            )
 
     calls = display_chain[display_chain["instrument_type"] == "CE"].set_index("strike_price")
     puts = display_chain[display_chain["instrument_type"] == "PE"].set_index("strike_price")
@@ -574,6 +642,32 @@ with tab2:
 
 with tab3:
     st.markdown("### Interactive Strategy Payoff Builder")
+
+    with st.expander("📖 Strategy term glossary — hover over any term to learn more"):
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown("""
+**Net Premium** — Total cash received (credit) or paid (debit) upfront.
+- Debit: you pay to enter (e.g. ₹120 debit × 50 lot = ₹6,000 max risk)
+- Credit: you receive cash (e.g. ₹65 credit = ₹3,250 income, also your max profit)
+
+**Max Profit / Max Loss** — The absolute best and worst-case outcomes at expiry.
+For spreads these are *fixed* — your loss can never exceed Max Loss no matter what happens.
+
+**Breakeven** — The NIFTY level at expiry where P&L = ₹0.
+If NIFTY closes exactly at breakeven, you neither profit nor lose.
+""")
+        with g2:
+            st.markdown("""
+**POP (Probability of Profit)** — From Monte Carlo simulation: % of simulated expiries
+where this trade ends profitable. 60% POP = profitable in 60 of 100 simulated outcomes.
+
+**R:R (Risk:Reward)** — Potential gain ÷ potential loss.
+R:R of 2.0 = earn ₹2 for every ₹1 risked. Higher is better, but higher R:R
+usually means lower POP (the trade is harder to win).
+
+**Lot size** — NIFTY options trade in lots of 50. All P&L figures include the full lot.
+""")
 
     sb_col1, sb_col2 = st.columns([1, 2])
 
@@ -750,6 +844,21 @@ with tab4:
         _plotly_axis_style(fig_mc)
         st.plotly_chart(fig_mc, use_container_width=True)
 
+        # Breakeven callout using Target Price as the reference level
+        _be_pct = float((terminals >= mc_target).mean() * 100)
+        _be_color = "#00d4aa" if _be_pct >= 55 else "#fbbf24" if _be_pct >= 40 else "#ff6b6b"
+        _be_verdict = "favourable" if _be_pct >= 55 else "marginal" if _be_pct >= 40 else "unfavourable"
+        st.markdown(
+            f'<div style="background:rgba(78,205,196,0.07);border:1px solid rgba(78,205,196,0.2);'
+            f'border-radius:10px;padding:0.8rem 1.2rem;margin:0.6rem 0;font-size:0.88rem">'
+            f'📊 <strong style="color:{_be_color}">{_be_pct:.1f}%</strong> of {mc_sims:,} simulated paths expire '
+            f'<strong>above ₹{mc_target:,.0f}</strong> (your target / breakeven) — '
+            f'<span style="color:{_be_color};font-weight:600">{_be_verdict}</span>. '
+            f'<span style="color:#8b8fa3;font-size:0.8rem">Adjust target price or IV to explore different scenarios.</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
         st.markdown("#### Distribution Statistics")
         stat_cols = st.columns(6)
         stat_cols[0].metric("Mean", f"₹{np.mean(terminals):,.0f}")
@@ -782,21 +891,38 @@ with tab5:
     bt_col1, bt_col2 = st.columns(2)
 
     with bt_col1:
+        # Build a Buy & Hold NIFTY benchmark aligned to the backtest period
+        _n_weeks = len(eq_df)
+        _bh_history = history_df.tail(_n_weeks).copy().reset_index(drop=True)
+        if len(_bh_history) >= 2:
+            _bh_returns = _bh_history["close"].pct_change().fillna(0)
+            _bh_equity = capital * (1 + _bh_returns).cumprod()
+        else:
+            _bh_equity = pd.Series([capital] * _n_weeks)
+
         fig_eq = go.Figure()
         fig_eq.add_trace(go.Scatter(
             x=eq_df["expiry"], y=eq_df["equity"],
             fill="tozeroy", fillcolor="rgba(0,212,170,0.1)",
-            line=dict(color="#00d4aa", width=2), name="Equity",
+            line=dict(color="#00d4aa", width=2), name="Options Strategy",
         ))
         fig_eq.add_trace(go.Scatter(
             x=eq_df["expiry"], y=eq_df["peak_equity"],
-            line=dict(color="#fbbf24", width=1, dash="dash"), name="Peak",
+            line=dict(color="#fbbf24", width=1, dash="dash"), name="Peak Equity",
+        ))
+        fig_eq.add_trace(go.Scatter(
+            x=eq_df["expiry"], y=_bh_equity.values[:len(eq_df)],
+            line=dict(color="#9ca3af", width=1.5, dash="dot"),
+            name="Buy & Hold NIFTY",
+            opacity=0.75,
         ))
         fig_eq.add_hline(y=capital, line_dash="dot", line_color="rgba(255,255,255,0.3)")
         fig_eq.update_layout(
             template="plotly_dark", height=400,
-            title="Equity Curve", paper_bgcolor="rgba(0,0,0,0)",
+            title="Equity Curve vs Buy & Hold NIFTY",
+            paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(15,12,41,0.5)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
         )
         st.plotly_chart(fig_eq, use_container_width=True)
 
@@ -851,11 +977,14 @@ with tab5:
         st.plotly_chart(fig_strat, use_container_width=True)
 
     st.markdown("### Detailed Trade Log")
-    display_bt = backtest_df.copy()
+    st.caption("POP = Probability of Profit (% chance the trade was expected to win at entry, from Monte Carlo simulation). Latest trades shown first.")
+    display_bt = backtest_df.copy().sort_values("expiry", ascending=False).reset_index(drop=True)
     display_bt["pnl_formatted"] = display_bt["pnl"].apply(lambda x: f"₹{x:,.0f}")
     display_bt["won_icon"] = display_bt["won"].apply(lambda x: "✅" if x else "❌")
+    display_bt = display_bt.rename(columns={"pop": "POP (win prob %)", "risk_reward": "R:R"})
+    display_bt["POP (win prob %)"] = (display_bt["POP (win prob %)"] * 100).round(0).astype(int).astype(str) + "%"
     st.dataframe(
-        display_bt[["expiry", "strategy", "market_condition", "pnl_formatted", "won_icon", "pop", "risk_reward"]],
+        display_bt[["expiry", "strategy", "market_condition", "pnl_formatted", "won_icon", "POP (win prob %)", "R:R"]],
         height=400, use_container_width=True,
     )
 
@@ -867,6 +996,37 @@ with tab5:
 with tab6:
     st.markdown("### Live Trade Signal Generator")
     st.markdown(f'Current market condition: <span class="condition-badge badge-{market_condition}">{market_condition}</span>', unsafe_allow_html=True)
+
+    # ── Strategy selection rationale: if-then logic ───────────────────────────
+    _rsi_now = float(latest["rsi_14"])
+    _sma20_now = float(latest["sma_20"])
+    _sma50_now = float(latest["sma_50"])
+    _spot_vs_sma20_pct = abs(latest_close - _sma20_now) / _sma20_now * 100
+
+    _regime_why = {
+        "bullish": f"RSI = {_rsi_now:.0f} (&gt;60) and spot is above both SMA20 (₹{_sma20_now:,.0f}) and SMA50 (₹{_sma50_now:,.0f}).",
+        "bearish": f"RSI = {_rsi_now:.0f} (&lt;40) and spot is below both SMA20 (₹{_sma20_now:,.0f}) and SMA50 (₹{_sma50_now:,.0f}).",
+        "high_volatility": f"IV ({base_iv*100:.0f}%) is &gt;25% above the 20-period average — elevated fear premium.",
+        "sideways": f"RSI = {_rsi_now:.0f} (between 40–60) and spot is within {_spot_vs_sma20_pct:.1f}% of SMA20 (₹{_sma20_now:,.0f}).",
+    }
+    _switch_hints = {
+        "bullish": "If RSI falls below 40 → switch to <strong>Bear Put Spread</strong>. If RSI stays 40–60 → switch to <strong>Short Strangle</strong>.",
+        "bearish": "If RSI rises above 60 → switch to <strong>Bull Call Spread</strong>. If RSI stays 40–60 → switch to <strong>Short Strangle</strong>.",
+        "sideways": "If RSI breaks above 60 → switch to <strong>Bull Call Spread</strong>. If RSI breaks below 40 → switch to <strong>Bear Put Spread</strong>.",
+        "high_volatility": "If IV normalises below the 20-period average → switch to <strong>Short Strangle</strong>.",
+    }
+    _strat_name_map = {"bullish": "Bull Call Spread", "bearish": "Bear Put Spread", "sideways": "Short Strangle", "high_volatility": "Long Strangle"}
+    _cur_strat_name = _strat_name_map.get(market_condition, "—")
+
+    st.markdown(
+        f'<div style="background:rgba(78,205,196,0.08);border:1px solid rgba(78,205,196,0.2);'
+        f'border-radius:10px;padding:0.9rem 1.2rem;margin:0.8rem 0 1.2rem 0;font-size:0.85rem;line-height:1.7">'
+        f'<span style="color:#4ecdc4;font-weight:700">Why {_cur_strat_name}?</span><br>'
+        f'<span style="color:#cbd5e1">{_regime_why.get(market_condition, "")}</span><br>'
+        f'<span style="color:#8b8fa3;font-size:0.8rem">Switch signal: {_switch_hints.get(market_condition, "")}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     selector = StrikeSelector(enriched_chain, spot_price)
     prob_model = POPEstimator(spot_price, base_iv, tte_days / 365)
@@ -914,6 +1074,11 @@ with tab6:
 
             conf_color = {"high": "#00d4aa", "medium": "#fbbf24", "low": "#ff6b6b"}[confidence]
 
+            _iv_desc = "moderate" if base_iv < 0.18 else "elevated" if base_iv > 0.25 else "normal"
+            _combo_rationale = (
+                f"IV at {base_iv*100:.0f}% ({_iv_desc}) · {strat_name} fits {market_condition} regime "
+                f"(RSI={_rsi_now:.0f}) · Max loss capped at ₹{abs(combo.max_loss):,.0f}"
+            )
             st.markdown(f"""
             <div class="signal-card signal-{confidence}">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem">
@@ -932,8 +1097,61 @@ with tab6:
                     <div><span style="color:#6b7280">POP</span><br><span style="color:#00d4aa;font-weight:600">{stats['pop']:.1%}</span></div>
                     <div><span style="color:#6b7280">Expected P&L</span><br><span style="color:{'#00d4aa' if stats['expected_payoff'] > 0 else '#ff6b6b'};font-weight:600">₹{stats['expected_payoff']:,.0f}</span></div>
                 </div>
+                <div style="color:#6b7280;font-size:0.78rem;margin-top:0.6rem;font-style:italic;border-top:1px solid rgba(255,255,255,0.05);padding-top:0.5rem">
+                    {_combo_rationale}
+                </div>
             </div>
             """, unsafe_allow_html=True)
+
+    # ── Entry/Exit timing guide ───────────────────────────────────────────────
+    with st.expander("⏰ Timing Guide — When to enter & exit this week's position"):
+        st.markdown("""
+**Entry: Best after 2:00 PM**
+
+IV often peaks mid-session and softens toward close as market makers adjust positions.
+Entering after 2 PM gives you the benefit of:
+- Lower IV → cheaper premium for buyers, tighter spreads for sellers
+- Cleaner directional read after the morning noise settles
+- Roughly 5–7 minutes of pre-close time to adjust if needed
+
+---
+
+**Exit options — choose based on your risk appetite:**
+""")
+        eg1, eg2, eg3 = st.columns(3)
+        with eg1:
+            st.markdown(
+                '<div style="background:rgba(0,212,170,0.08);border:1px solid rgba(0,212,170,0.25);'
+                'border-radius:10px;padding:0.9rem;text-align:center">'
+                '<div style="color:#00d4aa;font-weight:700;font-size:0.9rem">50% Profit Target</div>'
+                '<div style="color:#cbd5e1;font-size:0.82rem;margin-top:0.5rem">Exit when position hits half of max profit. '
+                'Captures most theta decay while cutting gamma risk.</div>'
+                '<div style="color:#6b7280;font-size:0.75rem;margin-top:0.6rem;font-style:italic">Best for: Short Strangle, Iron Condor</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        with eg2:
+            st.markdown(
+                '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);'
+                'border-radius:10px;padding:0.9rem;text-align:center">'
+                '<div style="color:#fbbf24;font-weight:700;font-size:0.9rem">Day 3 Exit (Tue close)</div>'
+                '<div style="color:#cbd5e1;font-size:0.82rem;margin-top:0.5rem">If entered Monday, exit Tuesday close. '
+                'Avoids Wednesday–Thursday gamma acceleration and expiry-day spikes.</div>'
+                '<div style="color:#6b7280;font-size:0.75rem;margin-top:0.6rem;font-style:italic">Best for: Directional spreads</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        with eg3:
+            st.markdown(
+                '<div style="background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.25);'
+                'border-radius:10px;padding:0.9rem;text-align:center">'
+                '<div style="color:#a78bfa;font-weight:700;font-size:0.9rem">Thu 9:30 AM (pre-expiry)</div>'
+                '<div style="color:#cbd5e1;font-size:0.82rem;margin-top:0.5rem">Exit 30 minutes before expiry close '
+                '(≈9:30 AM). Avoids final-hour pin risk and settlement gaps.</div>'
+                '<div style="color:#6b7280;font-size:0.75rem;margin-top:0.6rem;font-style:italic">Best for: Any weekly position</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown("---")
     st.markdown("### All Strategy Combos")
