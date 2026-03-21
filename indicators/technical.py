@@ -23,10 +23,22 @@ def compute_ema(prices: pd.Series, period: int) -> pd.Series:
 
 
 def compute_vwap(df: pd.DataFrame) -> pd.Series:
+    """Cumulative VWAP from the first row of ``df`` (not reset per session).
+
+    On long histories this lags far below spot after sustained rallies — use
+    :func:`compute_rolling_vwap` for a level comparable to recent price.
+    """
     tp = (df["high"] + df["low"] + df["close"]) / 3
     cumulative_tp_vol = (tp * df["volume"]).cumsum()
     cumulative_vol = df["volume"].cumsum()
     return cumulative_tp_vol / cumulative_vol
+
+
+def compute_rolling_vwap(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Session VWAP-style level: volume-weighted typical price over last ``window`` bars."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    tp_vol = tp * df["volume"]
+    return tp_vol.rolling(window, min_periods=window).sum() / df["volume"].rolling(window, min_periods=window).sum()
 
 
 def compute_bollinger_bands(prices: pd.Series, period: int = None, std_dev: int = None):
@@ -53,6 +65,7 @@ def enrich_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["sma_50"] = compute_sma(df["close"], INDICATOR_PARAMS["sma_slow"])
     df["ema_9"] = compute_ema(df["close"], 9)
     df["vwap"] = compute_vwap(df)
+    df["vwap_20d"] = compute_rolling_vwap(df, window=20)
     df["bb_mid"], df["bb_upper"], df["bb_lower"] = compute_bollinger_bands(df["close"])
     df["atr_14"] = compute_atr(df)
     df["daily_return"] = df["close"].pct_change()

@@ -401,14 +401,22 @@ with tab1:
 
     with col2:
         st.markdown("### Technical Snapshot")
-        st.caption("Synthetic history scaled so last close = NIFTY spot in sidebar.")
+        st.caption(
+            "Synthetic history scaled so last close = NIFTY spot in sidebar. "
+            "Indicators are computed on that series (not live NSE data)."
+        )
 
+        v20 = latest["vwap_20d"]
+        v20_ok = pd.notna(v20)
         indicators = {
             "Close": (f"₹{latest_close:,.2f}", "white"),
             "SMA 20": (f"₹{latest['sma_20']:,.2f}", "green" if latest_close > latest['sma_20'] else "red"),
             "SMA 50": (f"₹{latest['sma_50']:,.2f}", "green" if latest_close > latest['sma_50'] else "red"),
             "RSI 14": (f"{latest['rsi_14']:.1f}", "red" if latest['rsi_14'] > 70 else "green" if latest['rsi_14'] < 30 else "blue"),
-            "VWAP": (f"₹{latest['vwap']:,.2f}", "blue"),
+            "VWAP (20d)": (
+                f"₹{float(v20):,.2f}" if v20_ok else "—",
+                "blue" if v20_ok and latest_close > v20 else "orange" if v20_ok else "blue",
+            ),
             "BB Upper": (f"₹{latest['bb_upper']:,.2f}", "purple"),
             "BB Lower": (f"₹{latest['bb_lower']:,.2f}", "purple"),
             "ATR 14": (f"{latest['atr_14']:.2f}", "orange"),
