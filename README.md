@@ -79,6 +79,12 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Streamlit Community Cloud
+
+- **Main file:** `app.py` (repo root)
+- **Python:** 3.10–3.12 supported via `requirements.txt`
+- If you see a redacted `ImportError`, open **Manage app → Logs**. Common fix: ensure `requirements.txt` installs fully (this repo includes `jinja2` for pandas compatibility).
+
 ## Configuration
 
 All parameters are centralized in `config/settings.py`:

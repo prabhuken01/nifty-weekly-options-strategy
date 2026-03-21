@@ -7,8 +7,13 @@ trade signals.
 """
 
 import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+
+# Repo root on Streamlit Cloud / local — ensures `config`, `data`, … import reliably
+_APP_DIR = Path(__file__).resolve().parent
+_root = str(_APP_DIR)
+if _root not in sys.path:
+    sys.path.insert(0, _root)
 
 import streamlit as st
 import pandas as pd
@@ -495,9 +500,12 @@ with tab2:
         st.markdown("#### 📗 CALLS (CE)")
         call_cols = ["ltp", "iv", "volume", "open_interest", "oi_change"] + greek_display
         available_cols = [c for c in call_cols if c in calls.columns]
+        # Plain dataframe avoids optional jinja2 / Styler issues on Streamlit Cloud
         st.dataframe(
-            calls[available_cols].style.background_gradient(cmap="Greens", subset=["open_interest"] if "open_interest" in available_cols else []),
-            height=500, use_container_width=True,
+            calls[available_cols],
+            height=500,
+            use_container_width=True,
+            hide_index=False,
         )
 
     with col_mid:
@@ -512,8 +520,10 @@ with tab2:
         put_cols = ["ltp", "iv", "volume", "open_interest", "oi_change"] + greek_display
         available_cols = [c for c in put_cols if c in puts.columns]
         st.dataframe(
-            puts[available_cols].style.background_gradient(cmap="Reds", subset=["open_interest"] if "open_interest" in available_cols else []),
-            height=500, use_container_width=True,
+            puts[available_cols],
+            height=500,
+            use_container_width=True,
+            hide_index=False,
         )
 
     st.markdown("---")
