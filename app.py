@@ -46,6 +46,11 @@ from ui.theme import theme_choice_sidebar, inject_global_css, plotly_template, p
 from models.liquidity import enrich_chain_liquidity
 from models.ranking import rank_combos
 from ui.info_guides import render_tab_hint
+from ui.greeks_monitor import render_greeks_monitoring_guide
+from ui.macro_cards import render_macro_strategy_row
+from analytics.mc_paths import simulate_daily_paths, cone_percentiles, mc_probability_table
+from analytics.greeks_timeline import greeks_vs_time_for_strike, theta_acceleration_series
+from options.bs_greeks import bs_greeks
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 
@@ -202,6 +207,7 @@ st.markdown("""
 
 with st.sidebar:
     theme = theme_choice_sidebar()
+    st.checkbox("Compact chart height", value=False, key="compact_charts")
     st.markdown("## ⚙️ Configuration")
     st.markdown("---")
 
@@ -245,6 +251,10 @@ with st.sidebar:
 inject_global_css(theme)
 
 
+def chart_h(h: float) -> int:
+    return int(h * 0.72) if st.session_state.get("compact_charts") else int(h)
+
+
 # ─── Data Generation ─────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
@@ -279,6 +289,8 @@ market_condition = classify_market(
 
 pcr_data = compute_pcr(enriched_chain)
 mp = max_pain(enriched_chain)
+
+bullish_prob = float(np.clip(0.5 + (float(latest["rsi_14"]) - 50.0) / 100.0, 0.32, 0.78))
 
 
 # ─── Header ───────────────────────────────────────────────────────────────────
@@ -340,14 +352,18 @@ for i, (label, value, color, sub, tooltip) in enumerate(metrics):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+render_macro_strategy_row(market_condition, iv_rank, tte_days, bullish_prob)
+st.markdown("<br>", unsafe_allow_html=True)
+
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📈 Market Overview",
     "🔗 Option Chain",
     "🎯 Strategy Builder",
     "🎲 Monte Carlo Lab",
+    "📉 Analytics Lab",
     "📊 Backtest Results",
     "🚀 Trade Signals",
 ])
@@ -885,10 +901,166 @@ with tab4:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5: Backtest Results
+# TAB 5: Analytics Lab (MC cone, Greeks path, point-in-time BS)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab5:
+    render_tab_hint("analytics")
+    st.markdown("### Analytics Lab")
+    st.caption(
+        "Synthetic paths + Black–Scholes reconstruction — **not** broker tape. "
+        "Use for intuition on cones, theta acceleration, and PIT Greeks."
+    )
+
+    ac1, ac2 = st.columns([1, 2])
+    with ac1:
+        ana_tte = st.slider("Cone horizon (days)", 2, 14, int(min(max(tte_days, 3), 10)), key="ana_tte")
+        ana_iv = st.slider("Model IV (analytics) %", 8, 45, int(base_iv * 100), key="ana_iv") / 100
+        ana_sims = st.select_slider("GBM paths", options=[2000, 5000, 10000, 25000], value=10000, key="ana_sims")
+    with ac2:
+        st.markdown("##### What you get here")
+        st.markdown(
+            "- **Probability cone** — cross-sectional percentiles of spot by day.\n"
+            "- **Greeks path** — CE/PE at a strike along the **mean** simulated path.\n"
+            "- **Point-in-time** — pick a history date + strike; set IV; read BS Greeks."
+        )
+
+    days_ax, paths = simulate_daily_paths(spot_price, ana_iv, ana_tte, ana_sims)
+    cone_df = cone_percentiles(paths)
+    prob_tbl = mc_probability_table(paths, spot_price)
+
+    fig_cone = go.Figure()
+    fig_cone.add_trace(go.Scatter(
+        x=cone_df["day"], y=cone_df["p75"], name="p75", line=dict(width=0), showlegend=False, hoverinfo="skip",
+    ))
+    fig_cone.add_trace(go.Scatter(
+        x=cone_df["day"], y=cone_df["p25"], name="p25–p75 band", line=dict(width=0),
+        fill="tonexty", fillcolor="rgba(78,205,196,0.15)", hoverinfo="skip",
+    ))
+    fig_cone.add_trace(go.Scatter(
+        x=cone_df["day"], y=cone_df["p95"], name="p95", line=dict(width=0), showlegend=False, hoverinfo="skip",
+    ))
+    fig_cone.add_trace(go.Scatter(
+        x=cone_df["day"], y=cone_df["p5"], name="p5–p95 whiskers", line=dict(width=0),
+        fill="tonexty", fillcolor="rgba(167,139,250,0.07)", hoverinfo="skip",
+    ))
+    fig_cone.add_trace(go.Scatter(
+        x=cone_df["day"], y=cone_df["p50"], name="Median", line=dict(color="#fbbf24", width=2.5),
+    ))
+    fig_cone.add_hline(y=spot_price, line_dash="dash", line_color="#94a3b8", annotation_text="Start spot")
+    fig_cone.update_layout(
+        template=plotly_template(),
+        height=chart_h(420),
+        title="GBM percentile cone (spot)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,12,41,0.5)",
+        xaxis_title="Day",
+        yaxis_title="Spot (₹)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=10)),
+    )
+    plotly_axis_style(fig_cone)
+    st.plotly_chart(fig_cone, use_container_width=True)
+
+    t1, t2 = st.columns(2)
+    with t1:
+        st.markdown("##### P(S > S₀) by day")
+        st.dataframe(prob_tbl, use_container_width=True, height=chart_h(260))
+    with t2:
+        st.markdown("##### Cone levels (sample)")
+        st.dataframe(
+            cone_df[["day", "p5", "p25", "p50", "p75", "p95"]].round(1),
+            use_container_width=True,
+            height=chart_h(260),
+        )
+
+    st.markdown("---")
+    st.markdown("#### Greeks vs time (mean path · ATM strike)")
+    gk1, gk2 = st.columns(2)
+    with gk1:
+        gk_strike = st.number_input(
+            "Strike for timeline",
+            value=float(round(float(spot_price) / 50) * 50),
+            step=50.0,
+            format="%.0f",
+            key="gk_strike",
+        )
+    with gk2:
+        gk_side = st.radio("Leg", ["CE", "PE"], horizontal=True, key="gk_side")
+
+    mean_path = paths.mean(axis=0)
+    gt_df = greeks_vs_time_for_strike(mean_path, gk_strike, ana_iv, ana_tte, gk_side)
+    gt_df["theta_accel"] = theta_acceleration_series(gt_df)
+
+    fig_g = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_g.add_trace(
+        go.Scatter(x=gt_df["day"], y=gt_df["theta"], name="Theta / day", line=dict(color="#fbbf24", width=2)),
+        secondary_y=False,
+    )
+    fig_g.add_trace(
+        go.Scatter(x=gt_df["day"], y=gt_df["theta_accel"], name="Theta accel (Δ²)", line=dict(color="#a78bfa", width=1.5)),
+        secondary_y=True,
+    )
+    fig_g.update_layout(
+        template=plotly_template(),
+        height=chart_h(360),
+        title="Theta & acceleration (synthetic)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,12,41,0.5)",
+        legend=dict(orientation="h", y=1.05, x=0, font=dict(size=10)),
+    )
+    fig_g.update_yaxes(title_text="Theta", secondary_y=False)
+    fig_g.update_yaxes(title_text="Accel", secondary_y=True)
+    plotly_axis_style(fig_g)
+    st.plotly_chart(fig_g, use_container_width=True)
+
+    greek_cols = ["day", "dte_left", "delta", "gamma", "theta", "vega", "theoretical_price"]
+    st.dataframe(gt_df[greek_cols].round(4), use_container_width=True, height=min(chart_h(280), 320))
+
+    st.markdown("---")
+    st.markdown("#### Point-in-time Black–Scholes (reconstructed)")
+    pit1, pit2, pit3 = st.columns(3)
+    hist_dates = pd.to_datetime(history_df["date"])
+    with pit1:
+        pit_date = st.date_input(
+            "As-of date",
+            value=pd.Timestamp(hist_dates.max()).date(),
+            min_value=pd.Timestamp(hist_dates.min()).date(),
+            max_value=pd.Timestamp(hist_dates.max()).date(),
+            key="pit_date",
+        )
+    with pit2:
+        pit_strike = st.number_input("Strike", value=float(round(float(spot_price) / 50) * 50), step=50.0, key="pit_k")
+    with pit3:
+        pit_iv = st.slider("Assumed IV %", 8, 45, int(base_iv * 100), key="pit_iv") / 100
+
+    pit_row = history_df[history_df["date"].dt.date == pit_date]
+    if pit_row.empty:
+        _df = history_df.copy()
+        _df["_gap"] = (_df["date"].dt.normalize() - pd.Timestamp(pit_date)).abs()
+        pit_row = _df.sort_values("_gap").head(1)
+        st.caption("Exact date not in series — using nearest trading row.")
+    S_pit = float(pit_row["close"].iloc[0])
+    T_pit = max(float(tte_days) / 365.0, 1e-6)
+
+    ce = bs_greeks(S_pit, pit_strike, T_pit, pit_iv, "CE")
+    pe = bs_greeks(S_pit, pit_strike, T_pit, pit_iv, "PE")
+    pit_out = pd.DataFrame([
+        {"leg": "CE", **{k: ce[k] for k in ("delta", "gamma", "theta", "vega", "price")}},
+        {"leg": "PE", **{k: pe[k] for k in ("delta", "gamma", "theta", "vega", "price")}},
+    ])
+    pit_out = pit_out.rename(columns={"price": "theoretical_price"})
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Spot (as-of)", f"₹{S_pit:,.0f}")
+    m2.metric("Strike", f"₹{pit_strike:,.0f}")
+    m3.metric("T (years)", f"{T_pit:.4f}")
+    st.dataframe(pit_out.round(4), use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 6: Backtest Results
+# ═══════════════════════════════════════════════════════════════════════════════
+
+with tab6:
     render_tab_hint("backtest")
     st.markdown("### 52-Week Backtest Performance")
 
@@ -1040,6 +1212,15 @@ with tab5:
             sp_cols = ["week_id", "entry_date", "expiry", "strategy", "merit_score", "pnl", "won"]
             st.dataframe(spotlight[sp_cols], use_container_width=True, height=260)
 
+        daily_picks = (
+            bt_view.sort_values("merit_score", ascending=False)
+            .groupby("entry_date", as_index=False)
+            .head(2)
+            .sort_values(["entry_date", "merit_score"], ascending=[False, False])
+        )
+        with st.expander("📅 Daily picks — at most **2 strategies per entry date** (by merit)", expanded=False):
+            st.dataframe(daily_picks[sp_cols], use_container_width=True, height=260)
+
         st.markdown("### Detailed trade log")
         st.caption(
             "POP = model win odds at entry. **Merit** = composite score for comparing weeks. "
@@ -1061,10 +1242,10 @@ with tab5:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 6: Trade Signals
+# TAB 7: Trade Signals
 # ═══════════════════════════════════════════════════════════════════════════════
 
-with tab6:
+with tab7:
     render_tab_hint("signals")
     st.markdown("### Live Trade Signal Generator")
     st.markdown(f'Current market condition: <span class="condition-badge badge-{market_condition}">{market_condition}</span>', unsafe_allow_html=True)
@@ -1102,6 +1283,11 @@ with tab6:
 
     selector = StrikeSelector(enriched_chain, spot_price)
     prob_model = POPEstimator(spot_price, base_iv, tte_days / 365)
+
+    render_greeks_monitoring_guide(
+        tte_days,
+        ["bull_call_spread", "bear_put_spread", "short_strangle", "long_strangle"],
+    )
 
     strategy_map = {
         "bullish": [("Bull Call Spread", selector.get_bull_call_combos)],

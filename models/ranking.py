@@ -96,7 +96,8 @@ def score_combo(
     else:
         rr_score = min(1.0, rr / 2.5)
 
-    return 0.35 * delta_score + 0.30 * liq_score + 0.25 * pop_score + 0.10 * rr_score
+    # Tier-2 weights per consolidated plan: delta / liquidity / POP / R:R
+    return 0.40 * delta_score + 0.30 * liq_score + 0.20 * pop_score + 0.10 * rr_score
 
 
 def full_combo_rank(

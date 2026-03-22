@@ -103,6 +103,11 @@ def inject_global_css(theme: str):
         background-color: #ffffff !important;
         border: 1px solid #cbd5e1 !important;
     }
+    @media (max-width: 900px) {
+        .main-header { padding: 1rem 1.2rem !important; }
+        .main-header h1 { font-size: 1.35rem !important; }
+        .stTabs [data-baseweb="tab"] { padding: 6px 10px !important; font-size: 0.82rem !important; }
+    }
 </style>
 """,
             unsafe_allow_html=True,
@@ -113,6 +118,11 @@ def inject_global_css(theme: str):
 <style>
     .stApp { font-family: 'Inter', system-ui, sans-serif; }
     .strategy-card-lite { /* dark mode uses existing classes */ }
+    @media (max-width: 900px) {
+        .main-header { padding: 1rem 1.2rem !important; }
+        .main-header h1 { font-size: 1.35rem !important; }
+        .stTabs [data-baseweb="tab"] { padding: 6px 10px !important; font-size: 0.82rem !important; }
+    }
 </style>
 """,
             unsafe_allow_html=True,

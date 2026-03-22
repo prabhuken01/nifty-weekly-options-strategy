@@ -5,6 +5,7 @@ TAB_HINTS = {
     "chain": "OI / Vol in **₹ Cr** = notional liquidity at each strike (lot × LTP).",
     "builder": "Payoff curves are **at expiry**; live P&L moves with spot & IV.",
     "mc": "Terminal distribution assumes lognormal GBM — same model as POP engine.",
+    "analytics": "**MC cone** = path percentiles by day; **Greeks path** uses the mean path; **PIT** = BS on history + IV you set.",
     "backtest": "Synthetic weekly history — **Merit** blends POP, R:R, and outcome for sorting.",
     "signals": "Ranked by **Greek grade** (A/B/C) then composite **score** — pick one row and trade the strikes.",
 }
