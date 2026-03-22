@@ -42,6 +42,10 @@ from strategy.spreads import (
     bull_call_payoff, bear_put_payoff, long_strangle_payoff,
     short_strangle_payoff, iron_condor_payoff,
 )
+from ui.theme import theme_choice_sidebar, inject_global_css, plotly_template, plotly_axis_style
+from models.liquidity import enrich_chain_liquidity
+from models.ranking import rank_combos
+from ui.info_guides import render_tab_hint
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 
@@ -197,6 +201,7 @@ st.markdown("""
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    theme = theme_choice_sidebar()
     st.markdown("## ⚙️ Configuration")
     st.markdown("---")
 
@@ -206,6 +211,19 @@ with st.sidebar:
     capital = st.number_input("Capital (₹)", value=float(DEFAULT_CAPITAL), step=50000.0, format="%.0f")
 
     st.markdown("---")
+    st.markdown("### 🎯 Strategy hub")
+    strategy_focus = st.selectbox(
+        "Primary strategy",
+        [
+            "Auto (follow regime)",
+            "Bull Call Spread",
+            "Bear Put Spread",
+            "Short Strangle",
+            "Long Strangle",
+        ],
+        index=0,
+        help="Pins **Trade Signals** to one playbook and highlights the same name in **Backtest**.",
+    )
     st.markdown("### 🎯 Strategy Filters")
     min_rr = st.slider("Min Risk:Reward", 1.0, 5.0, STRATEGY_PARAMS["min_risk_reward"], 0.1)
     min_pop = st.slider("Min POP (%)", 30, 80, int(STRATEGY_PARAMS["min_pop"] * 100)) / 100
@@ -223,6 +241,8 @@ with st.sidebar:
         "</div>",
         unsafe_allow_html=True,
     )
+
+inject_global_css(theme)
 
 
 # ─── Data Generation ─────────────────────────────────────────────────────────
@@ -246,6 +266,8 @@ iv_rank_label = "Low — prefer buying" if iv_rank < 30 else "Elevated — favor
 enriched_history = enrich_dataframe(history_df)
 enriched_chain = enrich_chain(chain_df, spot_price, tte_days)
 liquid_chain = filter_liquid_strikes(enriched_chain, min_oi, min_vol)
+enriched_chain_liq = enrich_chain_liquidity(enriched_chain)
+liquid_chain_liq = enrich_chain_liquidity(liquid_chain)
 
 latest = enriched_history.iloc[-1]
 # Align regime with last bar (series scaled to end at configured spot)
@@ -335,18 +357,8 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # TAB 1: Market Overview
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _plotly_axis_style(fig):
-    fig.update_xaxes(
-        gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)",
-        tickfont=dict(color="#cbd5e1"), title_font=dict(color="#e2e8f0"),
-    )
-    fig.update_yaxes(
-        gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.2)",
-        tickfont=dict(color="#cbd5e1"), title_font=dict(color="#e2e8f0"),
-    )
-
-
 with tab1:
+    render_tab_hint("market")
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -371,7 +383,7 @@ with tab1:
                 opacity=0.85,
             ))
         fig_price.update_layout(
-            template="plotly_dark",
+            template=plotly_template(),
             height=440,
             margin=dict(l=60, r=30, t=50, b=50),
             showlegend=True,
@@ -383,7 +395,7 @@ with tab1:
             xaxis_title="Date",
             yaxis_title="Price (₹)",
         )
-        _plotly_axis_style(fig_price)
+        plotly_axis_style(fig_price)
         st.plotly_chart(fig_price, use_container_width=True)
 
         rsi_c, vol_c = st.columns(2)
@@ -398,13 +410,13 @@ with tab1:
             fig_rsi.add_hline(y=30, line_dash="dash", line_color="rgba(0,212,170,0.6)")
             fig_rsi.add_hrect(y0=30, y1=70, fillcolor="rgba(167,139,250,0.06)", line_width=0)
             fig_rsi.update_layout(
-                template="plotly_dark", height=300,
+                template=plotly_template(), height=300,
                 margin=dict(l=50, r=20, t=30, b=40),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.55)",
                 font=dict(color="#e2e8f0"), showlegend=False,
                 xaxis_title="Date", yaxis_title="RSI",
             )
-            _plotly_axis_style(fig_rsi)
+            plotly_axis_style(fig_rsi)
             st.plotly_chart(fig_rsi, use_container_width=True)
 
         with vol_c:
@@ -416,13 +428,13 @@ with tab1:
                 name="Volume", marker_color=vol_colors, opacity=0.65,
             ))
             fig_vol.update_layout(
-                template="plotly_dark", height=300,
+                template=plotly_template(), height=300,
                 margin=dict(l=50, r=20, t=30, b=40),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.55)",
                 font=dict(color="#e2e8f0"), showlegend=False,
                 xaxis_title="Date", yaxis_title="Volume",
             )
-            _plotly_axis_style(fig_vol)
+            plotly_axis_style(fig_vol)
             st.plotly_chart(fig_vol, use_container_width=True)
 
     with col2:
@@ -494,7 +506,7 @@ with tab1:
             textfont=dict(size=11),
         ))
         fig_regime.update_layout(
-            template="plotly_dark", height=280,
+            template=plotly_template(), height=280,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             showlegend=False, margin=dict(t=10, b=10, l=10, r=10),
         )
@@ -506,6 +518,7 @@ with tab1:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab2:
+    render_tab_hint("chain")
     st.markdown("### Live Option Chain Analysis")
 
     oc_col1, oc_col2, oc_col3 = st.columns(3)
@@ -517,15 +530,15 @@ with tab2:
         sort_by = st.selectbox("Sort by", ["strike_price", "open_interest", "volume", "iv"])
 
     if chain_view == "Liquid Only":
-        display_chain = liquid_chain
+        display_chain = liquid_chain_liq
     elif chain_view == "ATM ± 5":
         atm = round(spot_price / 50) * 50
-        display_chain = enriched_chain[
-            (enriched_chain["strike_price"] >= atm - 250) &
-            (enriched_chain["strike_price"] <= atm + 250)
+        display_chain = enriched_chain_liq[
+            (enriched_chain_liq["strike_price"] >= atm - 250) &
+            (enriched_chain_liq["strike_price"] <= atm + 250)
         ]
     else:
-        display_chain = enriched_chain
+        display_chain = enriched_chain_liq
 
     display_chain = display_chain.sort_values(sort_by)
 
@@ -566,7 +579,7 @@ with tab2:
 
     with col_ce:
         st.markdown("#### 📗 CALLS (CE)")
-        call_cols = ["ltp", "iv", "volume", "open_interest", "oi_change"] + greek_display
+        call_cols = ["ltp", "iv", "OI_₹Cr", "Vol_₹Cr", "volume", "open_interest", "oi_change"] + greek_display
         available_cols = [c for c in call_cols if c in calls.columns]
         # Plain dataframe avoids optional jinja2 / Styler issues on Streamlit Cloud
         st.dataframe(
@@ -585,7 +598,7 @@ with tab2:
 
     with col_pe:
         st.markdown("#### 📕 PUTS (PE)")
-        put_cols = ["ltp", "iv", "volume", "open_interest", "oi_change"] + greek_display
+        put_cols = ["ltp", "iv", "OI_₹Cr", "Vol_₹Cr", "volume", "open_interest", "oi_change"] + greek_display
         available_cols = [c for c in put_cols if c in puts.columns]
         st.dataframe(
             puts[available_cols],
@@ -602,7 +615,7 @@ with tab2:
         st.markdown("### Open Interest Distribution")
         oi_fig = go.Figure()
         for opt_type, color in [("CE", "#00d4aa"), ("PE", "#ff6b6b")]:
-            data = enriched_chain[enriched_chain["instrument_type"] == opt_type]
+            data = enriched_chain_liq[enriched_chain_liq["instrument_type"] == opt_type]
             oi_fig.add_trace(go.Bar(
                 x=data["strike_price"], y=data["open_interest"],
                 name=opt_type, marker_color=color, opacity=0.8,
@@ -610,7 +623,7 @@ with tab2:
         oi_fig.add_vline(x=spot_price, line_dash="dash", line_color="#fbbf24", annotation_text="Spot")
         oi_fig.add_vline(x=mp, line_dash="dot", line_color="#a78bfa", annotation_text="Max Pain")
         oi_fig.update_layout(
-            template="plotly_dark", height=400, barmode="group",
+            template=plotly_template(), height=400, barmode="group",
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.5)",
             xaxis_title="Strike Price", yaxis_title="Open Interest",
         )
@@ -620,7 +633,7 @@ with tab2:
         st.markdown("### IV Smile / Skew")
         iv_fig = go.Figure()
         for opt_type, color in [("CE", "#4ecdc4"), ("PE", "#ff6b6b")]:
-            data = enriched_chain[enriched_chain["instrument_type"] == opt_type].sort_values("strike_price")
+            data = enriched_chain_liq[enriched_chain_liq["instrument_type"] == opt_type].sort_values("strike_price")
             iv_fig.add_trace(go.Scatter(
                 x=data["strike_price"], y=data["iv"] * 100,
                 name=f"{opt_type} IV", mode="lines+markers",
@@ -629,7 +642,7 @@ with tab2:
             ))
         iv_fig.add_vline(x=spot_price, line_dash="dash", line_color="#fbbf24", annotation_text="Spot")
         iv_fig.update_layout(
-            template="plotly_dark", height=400,
+            template=plotly_template(), height=400,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.5)",
             xaxis_title="Strike Price", yaxis_title="Implied Volatility (%)",
         )
@@ -641,6 +654,7 @@ with tab2:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab3:
+    render_tab_hint("builder")
     st.markdown("### Interactive Strategy Payoff Builder")
 
     with st.expander("📖 Strategy term glossary — hover over any term to learn more"):
@@ -744,14 +758,14 @@ usually means lower POP (the trade is harder to win).
                                  annotation_text=f"BE: {be_price:,.0f}")
 
         fig_payoff.update_layout(
-            template="plotly_dark", height=500,
+            template=plotly_template(), height=500,
             title=dict(text=f"{strategy_type} — Payoff at Expiry", font=dict(size=16, color="#f1f5f9")),
             xaxis_title="NIFTY at Expiry",
             yaxis_title=f"P&L (₹) — Lot Size: {NIFTY_LOT_SIZE}",
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.5)",
             font=dict(color="#e2e8f0"),
         )
-        _plotly_axis_style(fig_payoff)
+        plotly_axis_style(fig_payoff)
         st.plotly_chart(fig_payoff, use_container_width=True)
 
         m1, m2, m3, m4 = st.columns(4)
@@ -767,6 +781,7 @@ usually means lower POP (the trade is harder to win).
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab4:
+    render_tab_hint("mc")
     st.markdown("### Monte Carlo Simulation Engine")
 
     mc_col1, mc_col2 = st.columns([1, 2])
@@ -834,14 +849,14 @@ with tab4:
         fig_mc.add_trace(go.Scatter(x=days, y=lower_1sd, name="-1σ", line=dict(color="#a78bfa", dash="dash")), row=1, col=2)
 
         fig_mc.update_layout(
-            template="plotly_dark", height=520,
+            template=plotly_template(), height=520,
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,12,41,0.5)",
             showlegend=True,
             font=dict(color="#e2e8f0"),
             title_font=dict(color="#f1f5f9"),
             margin=dict(t=60, b=50),
         )
-        _plotly_axis_style(fig_mc)
+        plotly_axis_style(fig_mc)
         st.plotly_chart(fig_mc, use_container_width=True)
 
         # Breakeven callout using Target Price as the reference level
@@ -874,119 +889,175 @@ with tab4:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab5:
+    render_tab_hint("backtest")
     st.markdown("### 52-Week Backtest Performance")
 
-    metrics_data = compute_metrics(backtest_df)
-    eq_df = equity_curve(backtest_df, capital)
+    _bt_options = ["All", "Bull Call Spread", "Bear Put Spread", "Short Strangle", "Iron Condor"]
+    _focus_to_bt = {
+        "Auto (follow regime)": "All",
+        "Bull Call Spread": "Bull Call Spread",
+        "Bear Put Spread": "Bear Put Spread",
+        "Short Strangle": "Short Strangle",
+        "Long Strangle": "Short Strangle",
+    }
+    _default_bt = _focus_to_bt.get(strategy_focus, "All")
+    _bt_idx = _bt_options.index(_default_bt) if _default_bt in _bt_options else 0
 
-    bm1, bm2, bm3, bm4, bm5, bm6 = st.columns(6)
-    bm1.metric("Total P&L", f"₹{metrics_data['total_pnl']:,.0f}",
-               delta=f"{metrics_data['total_pnl']/capital*100:+.1f}%")
-    bm2.metric("Win Rate", f"{metrics_data['win_rate']:.1%}")
-    bm3.metric("Sharpe Ratio", f"{metrics_data['sharpe_ratio']:.2f}")
-    bm4.metric("Profit Factor", f"{metrics_data['profit_factor']:.2f}")
-    bm5.metric("Max Drawdown", f"₹{metrics_data['max_drawdown']:,.0f}")
-    bm6.metric("Avg R:R", f"{metrics_data['avg_rr']:.2f}x")
-
-    bt_col1, bt_col2 = st.columns(2)
-
-    with bt_col1:
-        # Build a Buy & Hold NIFTY benchmark aligned to the backtest period
-        _n_weeks = len(eq_df)
-        _bh_history = history_df.tail(_n_weeks).copy().reset_index(drop=True)
-        if len(_bh_history) >= 2:
-            _bh_returns = _bh_history["close"].pct_change().fillna(0)
-            _bh_equity = capital * (1 + _bh_returns).cumprod()
-        else:
-            _bh_equity = pd.Series([capital] * _n_weeks)
-
-        fig_eq = go.Figure()
-        fig_eq.add_trace(go.Scatter(
-            x=eq_df["expiry"], y=eq_df["equity"],
-            fill="tozeroy", fillcolor="rgba(0,212,170,0.1)",
-            line=dict(color="#00d4aa", width=2), name="Options Strategy",
-        ))
-        fig_eq.add_trace(go.Scatter(
-            x=eq_df["expiry"], y=eq_df["peak_equity"],
-            line=dict(color="#fbbf24", width=1, dash="dash"), name="Peak Equity",
-        ))
-        fig_eq.add_trace(go.Scatter(
-            x=eq_df["expiry"], y=_bh_equity.values[:len(eq_df)],
-            line=dict(color="#9ca3af", width=1.5, dash="dot"),
-            name="Buy & Hold NIFTY",
-            opacity=0.75,
-        ))
-        fig_eq.add_hline(y=capital, line_dash="dot", line_color="rgba(255,255,255,0.3)")
-        fig_eq.update_layout(
-            template="plotly_dark", height=400,
-            title="Equity Curve vs Buy & Hold NIFTY",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,12,41,0.5)",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
+    bf1, bf2, bf3 = st.columns([2, 1, 1])
+    with bf1:
+        bt_strat = st.selectbox("Strategy lens", _bt_options, index=_bt_idx, key="bt_strat_lens")
+    with bf2:
+        bt_sort = st.selectbox(
+            "Sort rows",
+            ["Merit (high first)", "Expiry (newest)", "P&L (high to low)"],
+            key="bt_sort_order",
         )
-        st.plotly_chart(fig_eq, use_container_width=True)
+    with bf3:
+        st.caption("Merit blends POP, R:R & outcome — use it to spot **repeatable** weeks.")
 
-    with bt_col2:
-        fig_dd = go.Figure()
-        fig_dd.add_trace(go.Scatter(
-            x=eq_df["expiry"], y=eq_df["drawdown"],
-            fill="tozeroy", fillcolor="rgba(255,107,107,0.2)",
-            line=dict(color="#ff6b6b", width=2), name="Drawdown",
-        ))
-        fig_dd.update_layout(
-            template="plotly_dark", height=400,
-            title="Drawdown", paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,12,41,0.5)",
+    bt_view = backtest_df.copy()
+    if bt_strat != "All":
+        bt_view = bt_view[bt_view["strategy"] == bt_strat]
+    if bt_sort == "Merit (high first)":
+        bt_view = bt_view.sort_values("merit_score", ascending=False)
+    elif bt_sort == "Expiry (newest)":
+        bt_view = bt_view.sort_values("expiry", ascending=False)
+    else:
+        bt_view = bt_view.sort_values("pnl", ascending=False)
+
+    if bt_view.empty:
+        st.warning("No trades for this filter — pick **All** or another strategy.")
+    else:
+        metrics_data = compute_metrics(bt_view)
+        # Charts & equity must follow calendar order (sort order is for the table only)
+        bt_chrono = bt_view.sort_values("expiry")
+        eq_df = equity_curve(bt_chrono, capital)
+
+        bm1, bm2, bm3, bm4, bm5, bm6 = st.columns(6)
+        bm1.metric("Total P&L", f"₹{metrics_data['total_pnl']:,.0f}",
+                   delta=f"{metrics_data['total_pnl']/capital*100:+.1f}%")
+        bm2.metric("Win Rate", f"{metrics_data['win_rate']:.1%}")
+        bm3.metric("Sharpe Ratio", f"{metrics_data['sharpe_ratio']:.2f}")
+        bm4.metric("Profit Factor", f"{metrics_data['profit_factor']:.2f}")
+        bm5.metric("Max Drawdown", f"₹{metrics_data['max_drawdown']:,.0f}")
+        bm6.metric("Avg R:R", f"{metrics_data['avg_rr']:.2f}x")
+
+        bt_col1, bt_col2 = st.columns(2)
+
+        with bt_col1:
+            # Build a Buy & Hold NIFTY benchmark aligned to the backtest period
+            _n_weeks = len(eq_df)
+            _bh_history = history_df.tail(_n_weeks).copy().reset_index(drop=True)
+            if len(_bh_history) >= 2:
+                _bh_returns = _bh_history["close"].pct_change().fillna(0)
+                _bh_equity = capital * (1 + _bh_returns).cumprod()
+            else:
+                _bh_equity = pd.Series([capital] * _n_weeks)
+
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(
+                x=eq_df["expiry"], y=eq_df["equity"],
+                fill="tozeroy", fillcolor="rgba(0,212,170,0.1)",
+                line=dict(color="#00d4aa", width=2), name="Options Strategy",
+            ))
+            fig_eq.add_trace(go.Scatter(
+                x=eq_df["expiry"], y=eq_df["peak_equity"],
+                line=dict(color="#fbbf24", width=1, dash="dash"), name="Peak Equity",
+            ))
+            fig_eq.add_trace(go.Scatter(
+                x=eq_df["expiry"], y=_bh_equity.values[:len(eq_df)],
+                line=dict(color="#9ca3af", width=1.5, dash="dot"),
+                name="Buy & Hold NIFTY",
+                opacity=0.75,
+            ))
+            fig_eq.add_hline(y=capital, line_dash="dot", line_color="rgba(255,255,255,0.3)")
+            fig_eq.update_layout(
+                template=plotly_template(), height=400,
+                title="Equity Curve vs Buy & Hold NIFTY",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(15,12,41,0.5)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
+            )
+            st.plotly_chart(fig_eq, use_container_width=True)
+
+        with bt_col2:
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(
+                x=eq_df["expiry"], y=eq_df["drawdown"],
+                fill="tozeroy", fillcolor="rgba(255,107,107,0.2)",
+                line=dict(color="#ff6b6b", width=2), name="Drawdown",
+            ))
+            fig_dd.update_layout(
+                template=plotly_template(), height=400,
+                title="Drawdown", paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(15,12,41,0.5)",
+            )
+            st.plotly_chart(fig_dd, use_container_width=True)
+
+        bt_col3, bt_col4 = st.columns(2)
+
+        with bt_col3:
+            pnl_colors = ["#00d4aa" if p > 0 else "#ff6b6b" for p in bt_chrono["pnl"]]
+            fig_pnl = go.Figure(go.Bar(
+                x=bt_chrono["expiry"], y=bt_chrono["pnl"],
+                marker_color=pnl_colors, opacity=0.8,
+            ))
+            fig_pnl.update_layout(
+                template=plotly_template(), height=350,
+                title="Weekly P&L (filtered)", paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(15,12,41,0.5)",
+            )
+            st.plotly_chart(fig_pnl, use_container_width=True)
+
+        with bt_col4:
+            strat_perf = bt_view.groupby("strategy").agg(
+                total_pnl=("pnl", "sum"),
+                trades=("pnl", "count"),
+                win_rate=("won", "mean"),
+                avg_pnl=("pnl", "mean"),
+            ).round(2)
+
+            fig_strat = go.Figure(go.Bar(
+                x=strat_perf.index, y=strat_perf["total_pnl"],
+                marker_color=["#00d4aa" if p > 0 else "#ff6b6b" for p in strat_perf["total_pnl"]],
+                text=[f"₹{p:,.0f}" for p in strat_perf["total_pnl"]],
+                textposition="outside",
+            ))
+            fig_strat.update_layout(
+                template=plotly_template(), height=350,
+                title="P&L by Strategy (filtered)", paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(15,12,41,0.5)",
+            )
+            st.plotly_chart(fig_strat, use_container_width=True)
+
+        spotlight = (
+            bt_view.sort_values("merit_score", ascending=False)
+            .groupby("week_id", as_index=False)
+            .head(2)
+            .sort_values(["week_id", "merit_score"], ascending=[False, False])
         )
-        st.plotly_chart(fig_dd, use_container_width=True)
+        with st.expander("⭐ Weekly spotlight — top 2 merit scores per week (quick scan)", expanded=False):
+            sp_cols = ["week_id", "entry_date", "expiry", "strategy", "merit_score", "pnl", "won"]
+            st.dataframe(spotlight[sp_cols], use_container_width=True, height=260)
 
-    bt_col3, bt_col4 = st.columns(2)
-
-    with bt_col3:
-        pnl_colors = ["#00d4aa" if p > 0 else "#ff6b6b" for p in backtest_df["pnl"]]
-        fig_pnl = go.Figure(go.Bar(
-            x=backtest_df["expiry"], y=backtest_df["pnl"],
-            marker_color=pnl_colors, opacity=0.8,
-        ))
-        fig_pnl.update_layout(
-            template="plotly_dark", height=350,
-            title="Weekly P&L", paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,12,41,0.5)",
+        st.markdown("### Detailed trade log")
+        st.caption(
+            "POP = model win odds at entry. **Merit** = composite score for comparing weeks. "
+            "Rows follow your **Sort** order above."
         )
-        st.plotly_chart(fig_pnl, use_container_width=True)
-
-    with bt_col4:
-        strat_perf = backtest_df.groupby("strategy").agg(
-            total_pnl=("pnl", "sum"),
-            trades=("pnl", "count"),
-            win_rate=("won", "mean"),
-            avg_pnl=("pnl", "mean"),
-        ).round(2)
-
-        fig_strat = go.Figure(go.Bar(
-            x=strat_perf.index, y=strat_perf["total_pnl"],
-            marker_color=["#00d4aa" if p > 0 else "#ff6b6b" for p in strat_perf["total_pnl"]],
-            text=[f"₹{p:,.0f}" for p in strat_perf["total_pnl"]],
-            textposition="outside",
-        ))
-        fig_strat.update_layout(
-            template="plotly_dark", height=350,
-            title="P&L by Strategy", paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,12,41,0.5)",
+        display_bt = bt_view.copy()
+        display_bt["pnl_formatted"] = display_bt["pnl"].apply(lambda x: f"₹{x:,.0f}")
+        display_bt["won_icon"] = display_bt["won"].apply(lambda x: "✅" if x else "❌")
+        display_bt = display_bt.rename(columns={"pop": "POP (win prob %)", "risk_reward": "R:R"})
+        display_bt["POP (win prob %)"] = (display_bt["POP (win prob %)"] * 100).round(0).astype(int).astype(str) + "%"
+        log_cols = [
+            "week_id", "entry_date", "expiry", "strategy", "market_condition",
+            "merit_score", "pnl_formatted", "won_icon", "POP (win prob %)", "R:R",
+        ]
+        st.dataframe(
+            display_bt[log_cols],
+            height=400, use_container_width=True,
         )
-        st.plotly_chart(fig_strat, use_container_width=True)
-
-    st.markdown("### Detailed Trade Log")
-    st.caption("POP = Probability of Profit (% chance the trade was expected to win at entry, from Monte Carlo simulation). Latest trades shown first.")
-    display_bt = backtest_df.copy().sort_values("expiry", ascending=False).reset_index(drop=True)
-    display_bt["pnl_formatted"] = display_bt["pnl"].apply(lambda x: f"₹{x:,.0f}")
-    display_bt["won_icon"] = display_bt["won"].apply(lambda x: "✅" if x else "❌")
-    display_bt = display_bt.rename(columns={"pop": "POP (win prob %)", "risk_reward": "R:R"})
-    display_bt["POP (win prob %)"] = (display_bt["POP (win prob %)"] * 100).round(0).astype(int).astype(str) + "%"
-    st.dataframe(
-        display_bt[["expiry", "strategy", "market_condition", "pnl_formatted", "won_icon", "POP (win prob %)", "R:R"]],
-        height=400, use_container_width=True,
-    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -994,6 +1065,7 @@ with tab5:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 with tab6:
+    render_tab_hint("signals")
     st.markdown("### Live Trade Signal Generator")
     st.markdown(f'Current market condition: <span class="condition-badge badge-{market_condition}">{market_condition}</span>', unsafe_allow_html=True)
 
@@ -1038,14 +1110,34 @@ with tab6:
         "high_volatility": [("Long Strangle", selector.get_long_strangle_combos)],
     }
 
-    recommended = strategy_map.get(market_condition, [])
+    manual_focus_map = {
+        "Bull Call Spread": [("Bull Call Spread", selector.get_bull_call_combos)],
+        "Bear Put Spread": [("Bear Put Spread", selector.get_bear_put_combos)],
+        "Short Strangle": [("Short Strangle", selector.get_short_strangle_combos)],
+        "Long Strangle": [("Long Strangle", selector.get_long_strangle_combos)],
+    }
+
+    if strategy_focus == "Auto (follow regime)":
+        recommended = strategy_map.get(market_condition, [])
+    else:
+        recommended = manual_focus_map.get(strategy_focus, strategy_map.get(market_condition, []))
+        st.caption(f"Manual **strategy focus**: _{strategy_focus}_ — regime badge above is for context only.")
 
     if not recommended:
-        st.info("No strategies mapped for the current market condition. Showing all strategies.")
+        st.info("No strategies mapped — showing Bull & Bear spreads.")
         recommended = [
             ("Bull Call Spread", selector.get_bull_call_combos),
             ("Bear Put Spread", selector.get_bear_put_combos),
         ]
+
+    name_to_key = {
+        "Bull Call Spread": "bull_call_spread",
+        "Bear Put Spread": "bear_put_spread",
+        "Short Strangle": "short_strangle",
+        "Long Strangle": "long_strangle",
+    }
+
+    max_ranked = st.slider("Max ranked setups / strategy", 3, 12, 8, key="max_ranked_signals")
 
     for strat_name, combo_fn in recommended:
         st.markdown(f"#### {strat_name}")
@@ -1055,40 +1147,45 @@ with tab6:
             st.warning(f"No valid combos found for {strat_name}")
             continue
 
-        for combo in combos[:5]:
-            strategy_type_key = combo.strategy if hasattr(combo, "strategy") else "bull_call_spread"
-            try:
-                stats = prob_model.evaluate(combo, strategy_type_key)
-            except Exception:
-                stats = {"pop": 0.5, "risk_reward": 1.5, "expected_payoff": 0, "max_profit": 0, "max_loss": 0}
+        sk = name_to_key.get(strat_name, "bull_call_spread")
+        ranked = rank_combos(combos, sk, prob_model, enriched_chain, tte_days, min_pop, min_rr)
+        ranked = ranked[: int(max_ranked)]
 
-            if stats["pop"] < min_pop or stats["risk_reward"] < min_rr:
-                continue
+        if not ranked:
+            st.caption("No combos pass your POP / R:R filters — loosen sidebar thresholds.")
+            continue
 
+        for row in ranked:
+            combo = row["combo"]
+            stats = row["stats"]
+            g = row["grade"]
+            g_color = {"A": "#00d4aa", "B": "#fbbf24", "C": "#ff6b6b"}.get(g, "#94a3b8")
             if stats["pop"] > 0.60 and stats["risk_reward"] > 2.0:
                 confidence = "high"
             elif stats["pop"] > 0.50 and stats["risk_reward"] > 1.5:
                 confidence = "medium"
             else:
                 confidence = "low"
-
             conf_color = {"high": "#00d4aa", "medium": "#fbbf24", "low": "#ff6b6b"}[confidence]
+            rr_disp = "∞" if stats.get("risk_reward") == float("inf") else f"{stats['risk_reward']:.1f}x"
 
             _iv_desc = "moderate" if base_iv < 0.18 else "elevated" if base_iv > 0.25 else "normal"
             _combo_rationale = (
-                f"IV at {base_iv*100:.0f}% ({_iv_desc}) · {strat_name} fits {market_condition} regime "
-                f"(RSI={_rsi_now:.0f}) · Max loss capped at ₹{abs(combo.max_loss):,.0f}"
+                f"{row['grade_msg']} · Min leg OI **₹{row['oi_cr']:.1f} Cr** · "
+                f"IV {base_iv*100:.0f}% ({_iv_desc}) · RSI {_rsi_now:.0f} · "
+                f"Score {row['score']:.2f}"
             )
             st.markdown(f"""
             <div class="signal-card signal-{confidence}">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem;flex-wrap:wrap;gap:0.5rem">
                     <div>
                         <span style="color:#e2e8f0;font-weight:600;font-size:1.05rem">{combo.label}</span>
                         <span style="color:{conf_color};font-size:0.8rem;margin-left:0.8rem;text-transform:uppercase;font-weight:600">
                             {confidence} confidence
                         </span>
+                        <span style="background:rgba(167,139,250,0.15);color:{g_color};font-size:0.75rem;margin-left:0.6rem;padding:0.15rem 0.55rem;border-radius:6px;font-weight:700;border:1px solid rgba(167,139,250,0.35)">Grade {g}</span>
                     </div>
-                    <span style="color:#a78bfa;font-size:0.85rem">R:R {stats['risk_reward']:.1f}x</span>
+                    <span style="color:#a78bfa;font-size:0.85rem">R:R {rr_disp}</span>
                 </div>
                 <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:1rem;font-size:0.85rem">
                     <div><span style="color:#6b7280">Buy Strike</span><br><span style="color:#e2e8f0;font-weight:600">₹{combo.buy_strike:,.0f}</span></div>

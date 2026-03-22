@@ -4,6 +4,16 @@ from probability.black_scholes import spread_pop as bs_spread_pop
 from probability.monte_carlo import spread_expected_payoff, mc_pop_above
 
 
+def _normalize_strategy_type(strategy_type: str) -> str:
+    """Map StrikeCombo.strategy keys to BS/MC engine keys."""
+    return {
+        "bull_call_spread": "bull_call",
+        "bear_put_spread": "bear_put",
+        "short_strangle": "short_strangle",
+        "long_strangle": "long_strangle",
+    }.get(strategy_type, strategy_type)
+
+
 class POPEstimator:
     def __init__(self, spot, iv, tte_years):
         self.spot = spot
@@ -13,16 +23,21 @@ class POPEstimator:
     def evaluate(self, combo, strategy_type):
         """Evaluate a strike combo with both BS and MC methods."""
         net_premium = abs(combo.net_premium)
-
-        bs_pop = bs_spread_pop(
-            self.spot, combo.buy_strike, combo.sell_strike,
-            net_premium, self.iv, self.tte_years, strategy_type
-        )
+        engine_type = _normalize_strategy_type(strategy_type)
 
         mc_result = spread_expected_payoff(
             self.spot, combo.buy_strike, combo.sell_strike,
-            self.iv, self.tte_years, net_premium, strategy_type
+            self.iv, self.tte_years, net_premium, engine_type
         )
+
+        # Vertical BS formula does not apply to strangles — align BS with MC there.
+        if engine_type in ("short_strangle", "long_strangle"):
+            bs_pop = float(mc_result["pop"])
+        else:
+            bs_pop = bs_spread_pop(
+                self.spot, combo.buy_strike, combo.sell_strike,
+                net_premium, self.iv, self.tte_years, engine_type
+            )
 
         blended_pop = 0.4 * bs_pop + 0.6 * mc_result["pop"]
 

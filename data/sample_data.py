@@ -168,6 +168,7 @@ def generate_backtest_results(n_weeks=52):
 
     for i in range(n_weeks):
         expiry = base_date + timedelta(weeks=i + 1)
+        entry = expiry - timedelta(days=4)
         strategy = rng.choice(strategies, p=[0.35, 0.25, 0.25, 0.15])
 
         if strategy == "Bull Call Spread":
@@ -181,15 +182,27 @@ def generate_backtest_results(n_weeks=52):
 
         won = rng.random() < win_prob
         pnl = rng.normal(avg_win, avg_win * 0.3) if won else -rng.normal(avg_loss, avg_loss * 0.3)
+        pop = round(rng.uniform(0.40, 0.75), 4)
+        rr = round(rng.uniform(1.2, 3.5), 2)
+        # Simple composite merit for sorting / filtering (0–1)
+        merit_score = round(
+            0.45 * min(pop / 0.65, 1.0)
+            + 0.35 * min(rr / 2.5, 1.0)
+            + 0.20 * (1.0 if won else 0.3),
+            3,
+        )
 
         trades.append({
+            "week_id": i + 1,
+            "entry_date": entry.strftime("%Y-%m-%d"),
             "expiry": expiry.strftime("%Y-%m-%d"),
             "strategy": strategy,
             "entry_premium": round(abs(pnl) * rng.uniform(0.8, 1.2), 2),
             "pnl": round(pnl, 2),
             "won": won,
-            "pop": round(rng.uniform(0.40, 0.75), 2),
-            "risk_reward": round(rng.uniform(1.2, 3.5), 2),
+            "pop": pop,
+            "risk_reward": rr,
+            "merit_score": merit_score,
             "market_condition": rng.choice(["bullish", "bearish", "sideways", "high_volatility"]),
         })
 
